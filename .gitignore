@@ -1,0 +1,15 @@
+# build
+bin/
+obj/
+*.user
+
+# downloaded packages (re-download via Thunderstore)
+deps/
+
+# VS / rider
+.vs/
+.idea/
+*.suo
+
+# game / local
+*.log
