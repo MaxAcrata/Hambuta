@@ -6,6 +6,14 @@ obj/
 # downloaded packages (re-download via Thunderstore)
 deps/
 
+# voice module local artifacts
+voice/.venv/
+voice/models/
+voice/config.toml
+voice/__pycache__/
+voice/**/__pycache__/
+voice/.pytest_cache/
+
 # VS / rider
 .vs/
 .idea/

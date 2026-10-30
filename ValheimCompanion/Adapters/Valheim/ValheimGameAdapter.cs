@@ -35,6 +35,12 @@ namespace ValheimCompanion.Adapters.Valheim
         private string _afterBlock = "";
         private float _beforeDistance = float.NaN;
 
+        // Clean start: 0 bots at world load — purge companion-like leftovers once.
+        private const float PurgeDelaySeconds = 5f;
+        private bool _purgeArmed;
+        private bool _purgeDone;
+        private float _purgeCountdown;
+
         public SpawnStatus SpawnCompanion(bool useFallback)
         {
             if (HasCompanion)
@@ -426,6 +432,8 @@ namespace ValheimCompanion.Adapters.Valheim
 
         public void Tick(float dt)
         {
+            TickCleanStartPurge(dt);
+
             if (_companionGo == null) return;
 
             if (_moveStatus != MoveJobStatus.Pending && _moveStatus != MoveJobStatus.Running)
@@ -469,6 +477,47 @@ namespace ValheimCompanion.Adapters.Valheim
             }
         }
 
+        /// <summary>
+        /// Clean start: once per world load, destroy companion-like leftovers so the
+        /// game never opens with orphan bots (they live on in the world save).
+        /// Skipped if a companion is already bound (user spawned before the purge).
+        /// </summary>
+        private void TickCleanStartPurge(float dt)
+        {
+            if (!InWorld)
+            {
+                _purgeArmed = false;
+                _purgeDone = false;
+                return;
+            }
+
+            if (_purgeDone) return;
+
+            if (!_purgeArmed)
+            {
+                _purgeArmed = true;
+                _purgeCountdown = PurgeDelaySeconds;
+                Plugin.Log.LogMessage(
+                    $"[Adapter] clean start: companion purge in {PurgeDelaySeconds:0}s");
+                return;
+            }
+
+            if (HasCompanion)
+            {
+                _purgeDone = true;
+                Plugin.Log.LogMessage(
+                    "[Adapter] clean start: purge skipped (companion already spawned)");
+                return;
+            }
+
+            _purgeCountdown -= dt;
+            if (_purgeCountdown > 0f) return;
+
+            _purgeDone = true;
+            int n = CleanupTagged(keepCurrent: false);
+            Plugin.Log.LogMessage($"[Adapter] clean start: purged {n} companion-like leftover(s)");
+        }
+
         public void DespawnCompanion()
         {
             AbortMove("despawn");
@@ -496,6 +545,160 @@ namespace ValheimCompanion.Adapters.Valheim
         public string DescribeComponents() => NpcBootstrap.DescribeComponents(_companionGo);
 
         public string LastMoveReport => _beforeBlock + _afterBlock;
+
+        // ---- Voice/IPC verbs (0.5.0). All reuse existing SetFollowTarget / StopMoving / RequestMove. ----
+
+        /// <summary>FOLLOW_ME — set player as the follow target (same API as move marker).</summary>
+        public MoveJobStatus RequestFollowPlayer()
+        {
+            if (_companionGo == null) TryRebindExisting(log: true);
+            if (!HasCompanion)
+            {
+                _lastError = "no companion";
+                Plugin.Log.LogWarning($"[Voice] follow refused: {_lastError}");
+                return MoveJobStatus.Aborted;
+            }
+
+            Player player = Player.m_localPlayer;
+            if (player == null)
+            {
+                _lastError = "not in world (no local player)";
+                Plugin.Log.LogWarning($"[Voice] follow refused: {_lastError}");
+                return MoveJobStatus.Aborted;
+            }
+
+            // supersede any point-move
+            if (_moveStatus == MoveJobStatus.Pending || _moveStatus == MoveJobStatus.Running)
+            {
+                AbortMove("follow-player supersedes move");
+            }
+            else
+            {
+                DestroyMarker();
+            }
+
+            MonsterAI monsterAI = _companionGo.GetComponent<MonsterAI>();
+            if (monsterAI == null)
+            {
+                _lastError = "no MonsterAI on companion";
+                return MoveJobStatus.Aborted;
+            }
+
+            try
+            {
+                monsterAI.SetFollowTarget(player.gameObject);
+                ZNetView nview = _companionGo.GetComponent<ZNetView>();
+                if (nview != null && nview.IsValid() && nview.IsOwner())
+                {
+                    nview.GetZDO().Set(ZDOVars.s_follow, player.GetPlayerName());
+                }
+
+                Plugin.Log.LogMessage($"[Voice] FOLLOW_ME -> SetFollowTarget(player '{player.GetPlayerName()}')");
+                return MoveJobStatus.Succeeded;
+            }
+            catch (Exception ex)
+            {
+                _lastError = $"FOLLOW_ME threw: {ex.Message}";
+                Plugin.Log.LogError($"[Voice] {_lastError}");
+                return MoveJobStatus.Aborted;
+            }
+        }
+
+        /// <summary>COME_HERE — move to the local player position (resolved game-side, never from IPC).</summary>
+        public MoveJobStatus RequestMoveToPlayer()
+        {
+            if (_companionGo == null) TryRebindExisting(log: true);
+            Player player = Player.m_localPlayer;
+            if (player == null)
+            {
+                _lastError = "not in world (no local player)";
+                Plugin.Log.LogWarning($"[Voice] move-here refused: {_lastError}");
+                return MoveJobStatus.Aborted;
+            }
+
+            Plugin.Log.LogMessage($"[Voice] COME_HERE -> RequestMove(player pos {Fmt(player.transform.position)})");
+            return RequestMove(player.transform.position);
+        }
+
+        /// <summary>STOP — clear follow target, stop moving, clear ZDO s_follow (existing cleanup).</summary>
+        public MoveJobStatus RequestStop()
+        {
+            if (_companionGo == null) TryRebindExisting(log: true);
+            if (!HasCompanion)
+            {
+                _lastError = "no companion";
+                Plugin.Log.LogWarning($"[Voice] stop refused: {_lastError}");
+                return MoveJobStatus.Aborted;
+            }
+
+            try
+            {
+                if (_moveStatus == MoveJobStatus.Pending || _moveStatus == MoveJobStatus.Running)
+                {
+                    AbortMove("STOP requested");
+                }
+                else
+                {
+                    CleanupMoveHardware();
+                }
+
+                _moveStatus = MoveJobStatus.None;
+                Plugin.Log.LogMessage("[Voice] STOP -> follow cleared + StopMoving");
+                return MoveJobStatus.Succeeded;
+            }
+            catch (Exception ex)
+            {
+                _lastError = $"STOP threw: {ex.Message}";
+                Plugin.Log.LogError($"[Voice] {_lastError}");
+                return MoveJobStatus.Aborted;
+            }
+        }
+
+        /// <summary>True when the companion is following the local player.</summary>
+        public bool IsFollowingPlayer()
+        {
+            if (_companionGo == null) return false;
+            MonsterAI monsterAI = _companionGo.GetComponent<MonsterAI>();
+            if (monsterAI == null) return false;
+            GameObject ft = monsterAI.GetFollowTarget();
+            if (ft == null) return false;
+            Player player = Player.m_localPlayer;
+            return player != null && ft == player.gameObject;
+        }
+
+        /// <summary>True when no follow target and no active move job.</summary>
+        public bool IsStopped()
+        {
+            if (_companionGo == null) return false;
+            MonsterAI monsterAI = _companionGo.GetComponent<MonsterAI>();
+            bool noFollow = monsterAI == null || monsterAI.GetFollowTarget() == null;
+            bool noMove = _moveStatus != MoveJobStatus.Pending && _moveStatus != MoveJobStatus.Running;
+            return noFollow && noMove;
+        }
+
+        public string FollowTargetName
+        {
+            get
+            {
+                if (_companionGo == null) return "";
+                MonsterAI monsterAI = _companionGo.GetComponent<MonsterAI>();
+                GameObject ft = monsterAI != null ? monsterAI.GetFollowTarget() : null;
+                return ft != null ? ft.name : "";
+            }
+        }
+
+        public bool InWorld => Player.m_localPlayer != null;
+
+        public float DistanceToPlayer
+        {
+            get
+            {
+                if (_companionGo == null) return float.NaN;
+                Player player = Player.m_localPlayer;
+                if (player == null) return float.NaN;
+                return Vector3.Distance(_companionGo.transform.position, player.transform.position);
+            }
+        }
 
         private void FinishMove(MoveJobStatus status, string reason)
         {

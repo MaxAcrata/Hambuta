@@ -3,6 +3,7 @@
 Minimal Windows BepInEx (Jötunn) prototype: spawn an NPC companion, read real state, issue **one** move action and verify a real state change. Game-agnostic seam for a future MiMo brain — **no AI in this prototype**.
 
 - **Plan:** [`Valheim_Companion_Plan_v4.md`](Valheim_Companion_Plan_v4.md)
+- **Commands (console + voice):** [`COMMANDS.md`](COMMANDS.md)
 - **Working tree:** `D:\Projects\Valheim bot\`
 - **Game:** `D:\Steam\steamapps\common\Valheim` (Steam 892970, buildid 25909357)
 - **Versions:** BepInExPack_Valheim **5.4.2351**, Jötunn **2.30.2**, HarmonyX **2.9.0**, Unity **6000.0.75f1**
@@ -44,7 +45,7 @@ Requirements: .NET SDK 8.x, .NET Framework 4.8 targeting pack (via `Microsoft.NE
 | Confirmed (this machine, 2026-10-27) | Not claimed |
 |---|---|
 | Build 0 errors (TFM net48) | Multiplayer / dedicated server |
-| BepInEx clean load (2 plugins, 0 failed) | Persistence across client restart beyond ZDO rebind |
+| BepInEx clean load (2 plugins, 0 failed) | Persistence across client restart (clean start 0.5.1: leftovers purged on world load) |
 | `Skeleton_Friendly` spawn + `MakeTame` → `IsTamed=True`, `Faction=Players` | Haldor/Hildir as companions (rejected: `Trader.Interact`) |
 | Real ZDOID, health 400/400, coords match player distance | `MoveTo` driver (protected; intentionally unused) |
 | `SetFollowTarget` move: 14.76 m → 2.94 m in 9.7 s | CustomCreature path (reserve, unused) |
@@ -88,6 +89,19 @@ ValheimCompanion/
     VcCommand.cs
 docs/stage-reports/        # Stage 1–5 evidence
 ```
+
+## Voice control (optional, Russian PTT)
+
+In game console (F5): **`mic`** → hold **CTRL** and speak. Full guide: [`COMMANDS.md`](COMMANDS.md).
+
+| Say | Action |
+|---|---|
+| «Иди за мной» | follow the player |
+| «Иди сюда» | move to player position |
+| «Стой» | stop and clear follow |
+| «Статус» | print real companion state |
+
+Details / DSP: [`voice/README_VOICE.md`](voice/README_VOICE.md), [`COMMANDS.md`](COMMANDS.md) §4.
 
 ## How to attach MiMo later (design only — not implemented)
 

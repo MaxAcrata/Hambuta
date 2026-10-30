@@ -2,6 +2,22 @@
 
 All versions are BepInEx plugins under `Valheim\BepInEx\plugins\ValheimCompanion\`.
 
+## 0.5.1 — 2026-10-30
+
+- **Clean start:** auto-purge of companion-like NPCs ~5 s after world load (once per load; skipped if a companion is already bound). No orphan bots at game launch — spawn only via `vc spawn`.
+- `mic`: voice console window is closed automatically when the game exits.
+
+## 0.5.0 — 2026-10-27 (voice prototype)
+
+- **Optional** loopback IPC for the Python voice module (`Voice.IpcEnabled`, `Voice.IpcPort`, default 8765, `127.0.0.1` only).
+- Adapter verbs (reuse existing `SetFollowTarget`/`StopMoving`/`RequestMove` — no second movement path):
+  `RequestFollowPlayer`, `RequestMoveToPlayer`, `RequestStop`, `IsFollowingPlayer`, `IsStopped`.
+- HTTP: `GET /health`, `POST /command` with fixed enum `FOLLOW_ME|COME_HERE|STOP|STATUS` (no coordinates).
+- HTTP thread enqueues; game API runs on the Unity main thread (`Plugin.Update`).
+- New `voice/` tree: Vosk PTT + whitelist matching + verify polling + DSP (high-pass, trim, gate, optional noisereduce).
+- Console `mic` / `mic start|stop|status` and `mic.cmd` launchers.
+- Unit tests: `voice/tests` (58 tests). Game tests are manual.
+
 ## 0.4.1 — 2026-10-27
 
 - Fix: pre-tag companions (spawned before 0.4.0) were invisible to rebind/cleanup.

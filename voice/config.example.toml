@@ -1,0 +1,40 @@
+# Copy to config.toml and edit. No API keys — everything is local.
+
+[audio]
+mic_device = -1
+sample_rate = 16000
+
+[audio.dsp]
+# Cut game bass/rumble. Lower = less clipping of speech.
+# 100 is safe for voice; raise to 150-200 only if game bass is loud.
+highpass_hz = 100.0
+# Very conservative gate — speech valleys must survive.
+# Only raise (e.g. -40) if static hiss remains AFTER denoise.
+gate_db = -55.0
+# Only true silence / hard SFX edges are trimmed. Do not raise above -40.
+trim_db = -50.0
+# Spectral denoise (noisereduce). Keeps speech, removes game audio.
+denoise = true
+
+[ptt]
+# Push-to-talk key (python `keyboard` syntax).
+ptt_key = "left ctrl"
+
+[stt]
+# Unzipped vosk-model-small-ru-0.22 directory (see scripts/download_model.py).
+model_path = "models/vosk-model-small-ru-0.22"
+min_confidence = 0.0
+
+[match]
+fuzzy_min_ratio = 0.90
+
+[ipc]
+base_url = "http://127.0.0.1:8765"
+http_timeout = 5.0
+
+[verify]
+follow_me_budget_s = 5.0
+come_here_budget_s = 35.0
+stop_budget_s = 3.0
+status_budget_s = 3.0
+poll_interval_s = 0.25
