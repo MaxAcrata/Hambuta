@@ -2,6 +2,12 @@
 
 All versions are BepInEx plugins under `Valheim\BepInEx\plugins\ValheimCompanion\`.
 
+## 0.5.2 — 2026-10-31
+
+- Companion XP: kills credit XP (scaled by victim max health, 10–100), persisted in ZDO (`vc_xp`/`vc_level`).
+- Levels: +40 max health per level (full heal on level up); shown in `vc state` (11/12) and `vc xp`.
+- Debug: `vc xp add N`.
+
 ## 0.5.1 — 2026-10-30
 
 - **Clean start:** auto-purge of companion-like NPCs ~5 s after world load (once per load; skipped if a companion is already bound). No orphan bots at game launch — spawn only via `vc spawn`.

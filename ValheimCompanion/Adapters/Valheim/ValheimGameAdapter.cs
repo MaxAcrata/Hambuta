@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using HarmonyLib;
 using UnityEngine;
 using ValheimCompanion.Core;
 
@@ -18,6 +19,23 @@ namespace ValheimCompanion.Adapters.Valheim
 
         /// <summary>ZDO string key marking NPCs spawned/owned by this mod.</summary>
         public const string CompanionZdoTag = "vc_companion";
+
+        // Companion XP (0.5.2): kills grant XP; levels raise max health.
+        public const string XpZdoKey = "vc_xp";
+        public const string LevelZdoKey = "vc_level";
+        private const int XpPerLevel = 100;
+        private const float HealthPerLevel = 40f;
+        private const float XpKillHealthDivisor = 10f;
+        private const int XpKillMin = 10;
+        private const int XpKillMax = 100;
+        private const float KillPollInterval = 0.5f;
+
+        private static readonly AccessTools.FieldRef<Character, HitData> LastHitRef =
+            AccessTools.FieldRefAccess<Character, HitData>("m_lastHit");
+
+        private readonly System.Collections.Generic.HashSet<ZDOID> _creditedKills =
+            new System.Collections.Generic.HashSet<ZDOID>();
+        private float _killPollTimer;
 
         private GameObject _companionGo;
         private ZDOID _companionId = ZDOID.None;
@@ -100,6 +118,7 @@ namespace ValheimCompanion.Adapters.Valheim
             _prefabUsed = found.gameObject.name.Replace("(Clone)", "").Trim();
             _companionId = found.GetZDOID();
             _lastError = null;
+            ApplyStoredXpState();
             if (log)
             {
                 Plugin.Log.LogMessage(
@@ -433,6 +452,7 @@ namespace ValheimCompanion.Adapters.Valheim
         public void Tick(float dt)
         {
             TickCleanStartPurge(dt);
+            TickKillXp(dt);
 
             if (_companionGo == null) return;
 
@@ -516,6 +536,114 @@ namespace ValheimCompanion.Adapters.Valheim
             _purgeDone = true;
             int n = CleanupTagged(keepCurrent: false);
             Plugin.Log.LogMessage($"[Adapter] clean start: purged {n} companion-like leftover(s)");
+        }
+
+        // ---- Companion XP (kills -> XP -> level -> max health) ----
+
+        public static int LevelFromXp(int xp) => 1 + xp / XpPerLevel;
+
+        public int CompanionXp
+        {
+            get
+            {
+                if (_companionGo == null) return 0;
+                ZNetView nv = _companionGo.GetComponent<ZNetView>();
+                return nv != null && nv.IsValid() ? nv.GetZDO().GetInt(XpZdoKey, 0) : 0;
+            }
+        }
+
+        public int CompanionLevel => LevelFromXp(CompanionXp);
+
+        /// <summary>Credit kills by the companion: dead characters hit by us grant XP once.</summary>
+        private void TickKillXp(float dt)
+        {
+            if (!InWorld || !HasCompanion || _companionId.IsNone())
+            {
+                _creditedKills.Clear();
+                return;
+            }
+
+            _killPollTimer += dt;
+            if (_killPollTimer < KillPollInterval) return;
+            _killPollTimer = 0f;
+
+            foreach (Character c in AllCharacters())
+            {
+                if (c == null || !c.IsDead()) continue;
+                ZDOID id = c.GetZDOID();
+                if (id.IsNone() || _creditedKills.Contains(id)) continue;
+
+                bool ours = false;
+                try
+                {
+                    HitData hit = LastHitRef(c);
+                    ours = hit != null && hit.m_attacker == _companionId;
+                }
+                catch
+                {
+                    // ignore unreadable corpses
+                }
+
+                _creditedKills.Add(id);
+                if (!ours) continue;
+
+                int xp = Mathf.Clamp(
+                    Mathf.RoundToInt(c.GetMaxHealth() / XpKillHealthDivisor), XpKillMin, XpKillMax);
+                GrantXp(xp, fullHeal: true, reason: $"kill {c.gameObject.name}");
+            }
+        }
+
+        /// <summary>Grant XP, persist to ZDO, apply level-up max health. Returns false if not writable.</summary>
+        public bool GrantXp(int amount, bool fullHeal, string reason = "manual")
+        {
+            if (!HasCompanion)
+            {
+                _lastError = "no companion";
+                return false;
+            }
+
+            Character ch = _companionGo.GetComponent<Character>();
+            ZNetView nview = _companionGo.GetComponent<ZNetView>();
+            if (ch == null || nview == null || !nview.IsValid() || !nview.IsOwner())
+            {
+                _lastError = "cannot write companion XP ZDO (no ownership)";
+                Plugin.Log.LogWarning($"[Xp] {_lastError}");
+                return false;
+            }
+
+            ZDO zdo = nview.GetZDO();
+            int xp = zdo.GetInt(XpZdoKey, 0) + amount;
+            int level = LevelFromXp(xp);
+            zdo.Set(XpZdoKey, xp);
+            zdo.Set(LevelZdoKey, level);
+
+            float max = ch.GetMaxHealthBase() + HealthPerLevel * (level - 1);
+            ch.SetMaxHealth(max);
+            if (fullHeal) ch.SetHealth(max);
+
+            Plugin.Log.LogMessage(
+                $"[Xp] +{amount} ({reason}) -> xp={xp} level={level} maxHp={max:0.##}");
+            _lastError = null;
+            return true;
+        }
+
+        /// <summary>Re-apply max health from stored XP (formula-driven, idempotent).</summary>
+        private void ApplyStoredXpState()
+        {
+            if (_companionGo == null) return;
+            Character ch = _companionGo.GetComponent<Character>();
+            ZNetView nview = _companionGo.GetComponent<ZNetView>();
+            if (ch == null || nview == null || !nview.IsValid()) return;
+
+            int xp = nview.GetZDO().GetInt(XpZdoKey, 0);
+            if (xp <= 0) return;
+
+            float max = ch.GetMaxHealthBase() + HealthPerLevel * (LevelFromXp(xp) - 1);
+            if (Math.Abs(ch.GetMaxHealth() - max) > 0.1f)
+            {
+                ch.SetMaxHealth(max);
+                Plugin.Log.LogMessage($"[Xp] restored xp={xp} level={LevelFromXp(xp)} maxHp={max:0.##}");
+            }
         }
 
         public void DespawnCompanion()

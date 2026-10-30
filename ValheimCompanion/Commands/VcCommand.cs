@@ -27,7 +27,7 @@ namespace ValheimCompanion.Commands
         public override string Help =>
             "ValheimCompanion diagnostics. " +
             "Usage: vc spawn [fallback] | vc state | vc status | vc move here|x y z | " +
-            "vc inspect | vc scan | vc adopt | vc cleanup [keep] | vc despawn | vc help";
+            "vc inspect | vc scan | vc adopt | vc cleanup [keep] | vc xp [add N] | vc despawn | vc help";
 
         public override bool IsCheat => false;
 
@@ -49,7 +49,7 @@ namespace ValheimCompanion.Commands
             return new List<string>
             {
                 "spawn", "fallback", "state", "status", "move", "here", "inspect", "scan",
-                "adopt", "cleanup", "keep", "despawn", "help"
+                "adopt", "cleanup", "keep", "despawn", "xp", "add", "help"
             };
         }
 
@@ -113,11 +113,43 @@ namespace ValheimCompanion.Commands
                     Out(context, _adapter.ScanCharacters());
                     break;
 
+                case "xp":
+                    Xp(context, args);
+                    break;
+
                 case "help":
                 default:
                     Out(context, Help);
                     break;
             }
+        }
+
+        private void Xp(Terminal context, string[] args)
+        {
+            if (!_adapter.HasCompanion)
+            {
+                Out(context, "<color=#8b0000>no companion — vc spawn first</color>");
+                return;
+            }
+
+            if (args.Length >= 3 && args[1].ToLowerInvariant() == "add" &&
+                int.TryParse(args[2], out int n) && n > 0)
+            {
+                if (_adapter.GrantXp(n, fullHeal: true, reason: "vc xp add"))
+                {
+                    Out(context,
+                        $"<color=#00ff00>XP added: level {_adapter.CompanionLevel}, xp {_adapter.CompanionXp}</color>");
+                }
+                else
+                {
+                    Out(context, $"<color=#8b0000>XP add failed: {_adapter.LastError}</color>");
+                }
+
+                return;
+            }
+
+            Out(context, $"level : {_adapter.CompanionLevel}");
+            Out(context, $"xp    : {_adapter.CompanionXp} (need {100 * _adapter.CompanionLevel} for next)");
         }
 
         private void Spawn(Terminal context, bool useFallback)
@@ -156,6 +188,8 @@ namespace ValheimCompanion.Commands
             Out(context, $"8 OnGround/Swim   : {s.IsOnGround} / {s.IsSwimming}");
             Out(context, $"9 IsValid/Owner   : {s.IsValid} / {s.IsOwner}");
             Out(context, $"10 dist to player : {Adapters.Valheim.ValheimGameAdapter.FmtDist(s.DistanceToPlayer)}");
+            Out(context, $"11 level          : {_adapter.CompanionLevel}");
+            Out(context, $"12 xp             : {_adapter.CompanionXp}");
             Out(context, $"   faction        : {s.Faction}");
             Out(context, $"   IsDead         : {s.IsDead}");
         }
