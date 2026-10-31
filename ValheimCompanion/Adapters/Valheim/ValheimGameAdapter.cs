@@ -119,6 +119,16 @@ namespace ValheimCompanion.Adapters.Valheim
             _companionId = found.GetZDOID();
             _lastError = null;
             ApplyStoredXpState();
+            // Item m_shared resets to prefab values on save/load — re-apply the archer fixups
+            // (ranged AI window, unlimited ammo, no durability, follow speed).
+            try
+            {
+                NpcBootstrap.ApplyArcherLoadout(found.gameObject, grantItems: false);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[Adapter] archer fixups on rebind failed: {ex.Message}");
+            }
             if (log)
             {
                 Plugin.Log.LogMessage(

@@ -20,7 +20,7 @@ namespace ValheimCompanion
     {
         public const string PluginGuid = "com.valheimcompanion.prototype";
         public const string PluginName = "ValheimCompanion";
-        public const string PluginVersion = "0.5.3";
+        public const string PluginVersion = "0.5.4";
 
         internal static ManualLogSource Log;
 

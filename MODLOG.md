@@ -2,6 +2,15 @@
 
 All versions are BepInEx plugins under `Valheim\BepInEx\plugins\ValheimCompanion\`.
 
+## 0.5.4 — 2026-10-31
+
+- **Archer actually shoots:** bow gets a real ranged AI window (`m_aiAttackRange` 20 m, `m_aiAttackMaxAngle` 120°, stand-and-shoot). Vanilla item defaults (2 m / 5°) made the AI close to melee and never land the facing check — the companion never fired.
+- **Huntsman bow + Fire arrows** by user request: resolved at runtime by name keyword (`huntsman` / `arrowfire`, matching prefab name or localization key), cheapest-item fallback if absent.
+- **Бесконечный запас:** ammo stack 10000, bow durability disabled (`m_useDurability = false`) — never runs dry, never breaks.
+- **Follow fix:** companion walk speed = run speed ≥ 120% of the player's run speed (`BaseAI.Follow` only runs beyond 10 m, vanilla walk lagged behind).
+- Fixups re-applied on rebind after world reload (item `m_shared` resets to prefab values on save/load).
+- XP/leveling unchanged (0.5.2).
+
 ## 0.5.3 — 2026-10-31
 
 - **Archer companion:** `Skeleton_Friendly` spawns with a bow + matching ammo (both resolved at runtime from ZNetScene, cheapest first — no hardcoded item names).

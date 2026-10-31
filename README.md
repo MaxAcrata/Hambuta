@@ -61,7 +61,7 @@ Requirements: .NET SDK 8.x, .NET Framework 4.8 targeting pack (via `Microsoft.NE
 | Rejected | `Haldor`, `Hildir` | `Trader` Interactable conflict |
 | Note | | Skeleton look is a **compromise**, not a human companion |
 
-**Archer loadout (0.5.3):** `Skeleton_Friendly` spawns with a bow + matching ammo (resolved at runtime from `ZNetScene`, cheapest first — item names are asset data, never hardcoded). Default weapon/shield/ammo pools are stripped so nothing displaces the bow; armor is kept.
+**Archer loadout (0.5.3–0.5.4):** `Skeleton_Friendly` spawns with **Huntsman bow + Fire arrows** (resolved at runtime by name keyword over prefab name / localization key; cheapest-item fallback). The bow gets a real ranged AI attack window (20 m / 120° — vanilla item defaults are melee 2 m / 5°, which is why the companion never fired), unlimited ammo (stack 10000) and no durability drain. Default weapon/shield/ammo pools are stripped so nothing displaces the bow; armor is kept. Follow speed is raised (walk = run ≥ 120% of the player's run speed) — `BaseAI.Follow` only runs beyond 10 m and vanilla walk lagged behind.
 
 **Companion XP (0.5.2):** kills credit XP (10–100 by victim health); every 100 XP = level → **+40 max health** + full heal, persisted in world ZDOs (`vc xp`, `vc state` fields 11/12).
 

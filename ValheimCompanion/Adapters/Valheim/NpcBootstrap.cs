@@ -221,7 +221,7 @@ namespace ValheimCompanion.Adapters.Valheim
             // 3i. archer loadout (bow + ammo). Non-fatal: spawn still succeeds without a bow.
             try
             {
-                EquipArcherLoadout(go);
+                ApplyArcherLoadout(go, grantItems: true);
             }
             catch (Exception ex)
             {
@@ -233,15 +233,28 @@ namespace ValheimCompanion.Adapters.Valheim
             return result;
         }
 
-        /// <summary>Ammo stack granted with the bow (clamped to the ammo item's max stack).</summary>
-        private const int ArcherAmmoStack = 100;
+        /// <summary>Ammo stack granted with the bow — effectively unlimited ("бесконечный запас").</summary>
+        private const int ArcherAmmoStack = 10000;
+
+        // Vanilla item defaults are melee (m_aiAttackRange 2 m, m_aiAttackMaxAngle 5°): the AI closes
+        // to point-blank range and almost never lands the facing check, so a bow-equipped companion
+        // never shoots. Give the bow a real ranged attack window instead.
+        private const float ArcherAttackRange = 20f;
+        private const float ArcherAttackMaxAngle = 120f;
+        private const float ArcherAttackInterval = 2f;
+
+        /// <summary>Name keywords (normalized) preferring Huntsman bow — user request «Huntsman bow».</summary>
+        private static readonly string[] BowNameKeywords = { "bowhuntsman", "huntsmanbow", "huntsman" };
+
+        /// <summary>Name keywords (normalized) preferring fire arrows — user request «ArrowFire».</summary>
+        private static readonly string[] ArrowNameKeywords = { "arrowfire", "firearrow" };
 
         /// <summary>
-        /// Gives and equips a bow + matching ammo so the companion fights as an archer.
-        /// Bow/ammo prefab names live in asset bundles, not in assembly literals, so items are
-        /// resolved from ZNetScene at spawn time (cheapest first) instead of being hardcoded.
+        /// Archer loadout: Huntsman bow + Fire arrows (resolved at runtime by name keyword over the
+        /// prefab name / localization key, cheapest-item fallback). Ranged AI attack settings, unlimited
+        /// ammo and zero bow durability make the companion actually shoot and never run dry.
         /// </summary>
-        private static void EquipArcherLoadout(GameObject go)
+        public static void ApplyArcherLoadout(GameObject go, bool grantItems)
         {
             Humanoid humanoid = go.GetComponent<Humanoid>();
             if (humanoid == null)
@@ -250,16 +263,45 @@ namespace ValheimCompanion.Adapters.Valheim
                 return;
             }
 
-            // GiveDefaultItems() runs later from Start() and would re-add weapon/shield/ammo items:
-            // a shield or ammo replaces the bow in m_leftItem/m_ammoItem and a second weapon gives
-            // EquipBestWeapon an alternative to the bow. Strip those pools here; armor stays.
-            humanoid.m_defaultItems = FilterOutCompetingItems(humanoid.m_defaultItems);
-            humanoid.m_randomSets = FilterOutCompetingSets(humanoid.m_randomSets);
-            humanoid.m_randomItems = FilterOutCompetingRandomItems(humanoid.m_randomItems);
-            humanoid.m_randomWeapon = Array.Empty<GameObject>();
-            humanoid.m_randomShield = Array.Empty<GameObject>();
+            if (grantItems)
+            {
+                // GiveDefaultItems() runs later from Start() and would re-add weapon/shield/ammo items:
+                // a shield or ammo replaces the bow in m_leftItem/m_ammoItem and a second weapon gives
+                // EquipBestWeapon an alternative to the bow. Strip those pools here; armor stays.
+                humanoid.m_defaultItems = FilterOutCompetingItems(humanoid.m_defaultItems);
+                humanoid.m_randomSets = FilterOutCompetingSets(humanoid.m_randomSets);
+                humanoid.m_randomItems = FilterOutCompetingRandomItems(humanoid.m_randomItems);
+                humanoid.m_randomWeapon = Array.Empty<GameObject>();
+                humanoid.m_randomShield = Array.Empty<GameObject>();
 
-            GameObject bowPrefab = FindItemPrefab(ItemDrop.ItemData.ItemType.Bow, requiredAmmoType: null);
+                if (!HasBow(humanoid))
+                {
+                    GrantBowAndAmmo(humanoid);
+                }
+            }
+
+            FixupArcherItems(humanoid);
+            FixupFollowSpeed(go);
+        }
+
+        private static bool HasBow(Humanoid humanoid)
+        {
+            foreach (ItemDrop.ItemData item in humanoid.GetInventory().GetAllItems())
+            {
+                if (item != null && item.m_shared.m_itemType == ItemDrop.ItemData.ItemType.Bow)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static void GrantBowAndAmmo(Humanoid humanoid)
+        {
+            GameObject bowPrefab =
+                FindItemPrefab(ItemDrop.ItemData.ItemType.Bow, null, BowNameKeywords) ??
+                FindItemPrefab(ItemDrop.ItemData.ItemType.Bow, null, null);
             if (bowPrefab == null)
             {
                 Plugin.Log.LogWarning("[NpcBootstrap] archer loadout: no ItemType.Bow prefab found — companion spawns without bow");
@@ -267,9 +309,13 @@ namespace ValheimCompanion.Adapters.Valheim
             }
 
             string ammoType = bowPrefab.GetComponent<ItemDrop>().m_itemData.m_shared.m_ammoType;
-            GameObject ammoPrefab = string.IsNullOrEmpty(ammoType)
-                ? null
-                : FindItemPrefab(ItemDrop.ItemData.ItemType.Ammo, ammoType);
+            GameObject ammoPrefab = null;
+            if (!string.IsNullOrEmpty(ammoType))
+            {
+                ammoPrefab =
+                    FindItemPrefab(ItemDrop.ItemData.ItemType.Ammo, ammoType, ArrowNameKeywords) ??
+                    FindItemPrefab(ItemDrop.ItemData.ItemType.Ammo, ammoType, null);
+            }
 
             ItemDrop.ItemData bow = humanoid.PickupPrefab(bowPrefab, 0, autoequip: false);
             if (bow == null)
@@ -298,8 +344,59 @@ namespace ValheimCompanion.Adapters.Valheim
             Plugin.Log.LogMessage($"[NpcBootstrap] archer loadout: ammo '{ammoPrefab.name}' x{ammo.m_stack}");
         }
 
-        /// <summary>Cheapest item prefab of the given type; when <paramref name="requiredAmmoType"/> is set, ammo type must match.</summary>
-        private static GameObject FindItemPrefab(ItemDrop.ItemData.ItemType type, string requiredAmmoType)
+        /// <summary>
+        /// Per-item fixups that must survive world reload (item m_shared resets to prefab values).
+        /// Ranged AI attack window on bows; unlimited ammo stack and no durability anywhere.
+        /// </summary>
+        private static void FixupArcherItems(Humanoid humanoid)
+        {
+            foreach (ItemDrop.ItemData item in humanoid.GetInventory().GetAllItems())
+            {
+                if (item == null || item.m_shared == null) continue;
+                ItemDrop.ItemData.SharedData shared = item.m_shared;
+
+                if (shared.m_itemType == ItemDrop.ItemData.ItemType.Bow)
+                {
+                    shared.m_aiTargetType = ItemDrop.ItemData.AiTarget.Enemy;
+                    shared.m_aiAttackRange = ArcherAttackRange;
+                    shared.m_aiAttackRangeMin = 0f;
+                    shared.m_aiAttackInterval = ArcherAttackInterval;
+                    shared.m_aiAttackMaxAngle = ArcherAttackMaxAngle;
+                    shared.m_aiPrioritized = true;
+                    shared.m_useDurability = false;
+                    shared.m_durabilityDrain = 0f;
+                }
+                else if (shared.m_itemType == ItemDrop.ItemData.ItemType.Ammo ||
+                         shared.m_itemType == ItemDrop.ItemData.ItemType.AmmoNonEquipable)
+                {
+                    shared.m_maxStackSize = ArcherAmmoStack;
+                    item.m_stack = ArcherAmmoStack;
+                }
+            }
+        }
+
+        /// <summary>
+        /// BaseAI.Follow only runs beyond 10 m and otherwise walks — a vanilla-speed companion lags
+        /// behind a moving player. Walk == run and beat the player's run speed so following stays tight.
+        /// </summary>
+        private static void FixupFollowSpeed(GameObject go)
+        {
+            Character character = go.GetComponent<Character>();
+            if (character == null) return;
+
+            float playerRun = Player.m_localPlayer != null ? Player.m_localPlayer.m_runSpeed : 0f;
+            float target = Mathf.Max(8f, playerRun * 1.2f);
+            character.m_runSpeed = Mathf.Max(character.m_runSpeed, target);
+            character.m_speed = character.m_runSpeed;
+            Plugin.Log.LogMessage(
+                $"[NpcBootstrap] archer loadout: follow speed m_speed={character.m_speed:0.#} (player run {playerRun:0.#})");
+        }
+
+        /// <summary>
+        /// Resolves an item prefab from ZNetScene: prefers a name-keyword match (prefab name or
+        /// localization key like $item_bowhuntsman), falls back to the cheapest item of the type.
+        /// </summary>
+        private static GameObject FindItemPrefab(ItemDrop.ItemData.ItemType type, string requiredAmmoType, string[] nameKeywords)
         {
             ZNetScene scene = ZNetScene.instance;
             if (scene == null)
@@ -309,59 +406,85 @@ namespace ValheimCompanion.Adapters.Valheim
 
             GameObject best = null;
             int bestValue = int.MaxValue;
+            GameObject bestNamed = null;
+            int bestNamedValue = int.MaxValue;
+
             foreach (GameObject prefab in scene.m_prefabs)
             {
-                best = ConsiderItemPrefab(prefab, type, requiredAmmoType, best, ref bestValue);
+                ConsiderItemPrefab(prefab, type, requiredAmmoType, nameKeywords, ref best, ref bestValue, ref bestNamed, ref bestNamedValue);
             }
 
             foreach (GameObject prefab in scene.m_nonNetViewPrefabs)
             {
-                best = ConsiderItemPrefab(prefab, type, requiredAmmoType, best, ref bestValue);
+                ConsiderItemPrefab(prefab, type, requiredAmmoType, nameKeywords, ref best, ref bestValue, ref bestNamed, ref bestNamedValue);
             }
 
-            return best;
+            return bestNamed != null ? bestNamed : best;
         }
 
-        private static GameObject ConsiderItemPrefab(GameObject prefab, ItemDrop.ItemData.ItemType type,
-            string requiredAmmoType, GameObject best, ref int bestValue)
+        private static void ConsiderItemPrefab(GameObject prefab, ItemDrop.ItemData.ItemType type, string requiredAmmoType,
+            string[] nameKeywords, ref GameObject best, ref int bestValue, ref GameObject bestNamed, ref int bestNamedValue)
         {
-            if (prefab == null)
-            {
-                return best;
-            }
+            if (prefab == null) return;
 
             ItemDrop drop = prefab.GetComponent<ItemDrop>();
-            if (drop == null)
-            {
-                return best;
-            }
+            if (drop == null) return;
 
             ItemDrop.ItemData.SharedData shared = drop.m_itemData.m_shared;
-            if (shared.m_itemType != type)
-            {
-                return best;
-            }
+            if (shared.m_itemType != type) return;
 
             if (requiredAmmoType != null)
             {
-                if (shared.m_ammoType != requiredAmmoType)
-                {
-                    return best;
-                }
+                if (shared.m_ammoType != requiredAmmoType) return;
             }
             else if (type == ItemDrop.ItemData.ItemType.Bow && string.IsNullOrEmpty(shared.m_ammoType))
             {
                 // A bow with no ammo type cannot shoot — skip it.
-                return best;
+                return;
             }
 
-            if (shared.m_value >= bestValue)
+            if (shared.m_value < bestValue)
             {
-                return best;
+                bestValue = shared.m_value;
+                best = prefab;
             }
 
-            bestValue = shared.m_value;
-            return prefab;
+            if (nameKeywords != null && shared.m_value < bestNamedValue && NameMatches(prefab, drop, nameKeywords))
+            {
+                bestNamedValue = shared.m_value;
+                bestNamed = prefab;
+            }
+        }
+
+        private static bool NameMatches(GameObject prefab, ItemDrop drop, string[] keywords)
+        {
+            string prefabName = NormalizeName(prefab.name);
+            string itemName = NormalizeName(drop.m_itemData.m_shared.m_name);
+            foreach (string keyword in keywords)
+            {
+                if (prefabName.Contains(keyword) || itemName.Contains(keyword))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Lowercase alphanumeric only — "$item_bow_huntsman", "BowHuntsman" → "itembowhuntsman"/"bowhuntsman".</summary>
+        private static string NormalizeName(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new StringBuilder(s.Length);
+            foreach (char c in s.ToLowerInvariant())
+            {
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'))
+                {
+                    sb.Append(c);
+                }
+            }
+
+            return sb.ToString();
         }
 
         private static bool CompetesWithBow(GameObject prefab)
