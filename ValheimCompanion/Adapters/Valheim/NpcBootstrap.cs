@@ -218,9 +218,230 @@ namespace ValheimCompanion.Adapters.Valheim
                 return result;
             }
 
+            // 3i. archer loadout (bow + ammo). Non-fatal: spawn still succeeds without a bow.
+            try
+            {
+                EquipArcherLoadout(go);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[NpcBootstrap] archer loadout failed: {ex.Message}");
+            }
+
             result.Success = true;
             Plugin.Log.LogMessage($"[NpcBootstrap] SUCCESS prefab={result.PrefabUsed} ZDOID={id}");
             return result;
+        }
+
+        /// <summary>Ammo stack granted with the bow (clamped to the ammo item's max stack).</summary>
+        private const int ArcherAmmoStack = 100;
+
+        /// <summary>
+        /// Gives and equips a bow + matching ammo so the companion fights as an archer.
+        /// Bow/ammo prefab names live in asset bundles, not in assembly literals, so items are
+        /// resolved from ZNetScene at spawn time (cheapest first) instead of being hardcoded.
+        /// </summary>
+        private static void EquipArcherLoadout(GameObject go)
+        {
+            Humanoid humanoid = go.GetComponent<Humanoid>();
+            if (humanoid == null)
+            {
+                Plugin.Log.LogWarning("[NpcBootstrap] archer loadout: no Humanoid component, skipping");
+                return;
+            }
+
+            // GiveDefaultItems() runs later from Start() and would re-add weapon/shield/ammo items:
+            // a shield or ammo replaces the bow in m_leftItem/m_ammoItem and a second weapon gives
+            // EquipBestWeapon an alternative to the bow. Strip those pools here; armor stays.
+            humanoid.m_defaultItems = FilterOutCompetingItems(humanoid.m_defaultItems);
+            humanoid.m_randomSets = FilterOutCompetingSets(humanoid.m_randomSets);
+            humanoid.m_randomItems = FilterOutCompetingRandomItems(humanoid.m_randomItems);
+            humanoid.m_randomWeapon = Array.Empty<GameObject>();
+            humanoid.m_randomShield = Array.Empty<GameObject>();
+
+            GameObject bowPrefab = FindItemPrefab(ItemDrop.ItemData.ItemType.Bow, requiredAmmoType: null);
+            if (bowPrefab == null)
+            {
+                Plugin.Log.LogWarning("[NpcBootstrap] archer loadout: no ItemType.Bow prefab found — companion spawns without bow");
+                return;
+            }
+
+            string ammoType = bowPrefab.GetComponent<ItemDrop>().m_itemData.m_shared.m_ammoType;
+            GameObject ammoPrefab = string.IsNullOrEmpty(ammoType)
+                ? null
+                : FindItemPrefab(ItemDrop.ItemData.ItemType.Ammo, ammoType);
+
+            ItemDrop.ItemData bow = humanoid.PickupPrefab(bowPrefab, 0, autoequip: false);
+            if (bow == null)
+            {
+                Plugin.Log.LogWarning($"[NpcBootstrap] archer loadout: failed to give bow '{bowPrefab.name}'");
+                return;
+            }
+
+            humanoid.EquipItem(bow, triggerEquipEffects: false);
+            Plugin.Log.LogMessage($"[NpcBootstrap] archer loadout: bow '{bowPrefab.name}' (ammo type '{ammoType}')");
+
+            if (ammoPrefab == null)
+            {
+                Plugin.Log.LogWarning($"[NpcBootstrap] archer loadout: no ammo prefab for type '{ammoType}' — bow without ammo");
+                return;
+            }
+
+            ItemDrop.ItemData ammo = humanoid.PickupPrefab(ammoPrefab, ArcherAmmoStack, autoequip: false);
+            if (ammo == null)
+            {
+                Plugin.Log.LogWarning($"[NpcBootstrap] archer loadout: failed to give ammo '{ammoPrefab.name}'");
+                return;
+            }
+
+            humanoid.EquipItem(ammo, triggerEquipEffects: false);
+            Plugin.Log.LogMessage($"[NpcBootstrap] archer loadout: ammo '{ammoPrefab.name}' x{ammo.m_stack}");
+        }
+
+        /// <summary>Cheapest item prefab of the given type; when <paramref name="requiredAmmoType"/> is set, ammo type must match.</summary>
+        private static GameObject FindItemPrefab(ItemDrop.ItemData.ItemType type, string requiredAmmoType)
+        {
+            ZNetScene scene = ZNetScene.instance;
+            if (scene == null)
+            {
+                return null;
+            }
+
+            GameObject best = null;
+            int bestValue = int.MaxValue;
+            foreach (GameObject prefab in scene.m_prefabs)
+            {
+                best = ConsiderItemPrefab(prefab, type, requiredAmmoType, best, ref bestValue);
+            }
+
+            foreach (GameObject prefab in scene.m_nonNetViewPrefabs)
+            {
+                best = ConsiderItemPrefab(prefab, type, requiredAmmoType, best, ref bestValue);
+            }
+
+            return best;
+        }
+
+        private static GameObject ConsiderItemPrefab(GameObject prefab, ItemDrop.ItemData.ItemType type,
+            string requiredAmmoType, GameObject best, ref int bestValue)
+        {
+            if (prefab == null)
+            {
+                return best;
+            }
+
+            ItemDrop drop = prefab.GetComponent<ItemDrop>();
+            if (drop == null)
+            {
+                return best;
+            }
+
+            ItemDrop.ItemData.SharedData shared = drop.m_itemData.m_shared;
+            if (shared.m_itemType != type)
+            {
+                return best;
+            }
+
+            if (requiredAmmoType != null)
+            {
+                if (shared.m_ammoType != requiredAmmoType)
+                {
+                    return best;
+                }
+            }
+            else if (type == ItemDrop.ItemData.ItemType.Bow && string.IsNullOrEmpty(shared.m_ammoType))
+            {
+                // A bow with no ammo type cannot shoot — skip it.
+                return best;
+            }
+
+            if (shared.m_value >= bestValue)
+            {
+                return best;
+            }
+
+            bestValue = shared.m_value;
+            return prefab;
+        }
+
+        private static bool CompetesWithBow(GameObject prefab)
+        {
+            ItemDrop drop = prefab != null ? prefab.GetComponent<ItemDrop>() : null;
+            if (drop == null)
+            {
+                return false;
+            }
+
+            switch (drop.m_itemData.m_shared.m_itemType)
+            {
+                case ItemDrop.ItemData.ItemType.OneHandedWeapon:
+                case ItemDrop.ItemData.ItemType.TwoHandedWeapon:
+                case ItemDrop.ItemData.ItemType.TwoHandedWeaponLeft:
+                case ItemDrop.ItemData.ItemType.Bow:
+                case ItemDrop.ItemData.ItemType.Torch:
+                case ItemDrop.ItemData.ItemType.Shield:
+                case ItemDrop.ItemData.ItemType.Ammo:
+                case ItemDrop.ItemData.ItemType.AmmoNonEquipable:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static GameObject[] FilterOutCompetingItems(GameObject[] items)
+        {
+            if (items == null || items.Length == 0)
+            {
+                return Array.Empty<GameObject>();
+            }
+
+            var kept = new System.Collections.Generic.List<GameObject>(items.Length);
+            foreach (GameObject prefab in items)
+            {
+                if (prefab == null || !CompetesWithBow(prefab))
+                {
+                    kept.Add(prefab);
+                }
+            }
+
+            return kept.ToArray();
+        }
+
+        private static Humanoid.ItemSet[] FilterOutCompetingSets(Humanoid.ItemSet[] sets)
+        {
+            if (sets == null || sets.Length == 0)
+            {
+                return Array.Empty<Humanoid.ItemSet>();
+            }
+
+            foreach (Humanoid.ItemSet set in sets)
+            {
+                if (set != null)
+                {
+                    set.m_items = FilterOutCompetingItems(set.m_items);
+                }
+            }
+
+            return sets;
+        }
+
+        private static Humanoid.RandomItem[] FilterOutCompetingRandomItems(Humanoid.RandomItem[] items)
+        {
+            if (items == null || items.Length == 0)
+            {
+                return Array.Empty<Humanoid.RandomItem>();
+            }
+
+            var kept = new System.Collections.Generic.List<Humanoid.RandomItem>(items.Length);
+            foreach (Humanoid.RandomItem item in items)
+            {
+                if (item == null || item.m_prefab == null || !CompetesWithBow(item.m_prefab))
+                {
+                    kept.Add(item);
+                }
+            }
+
+            return kept.ToArray();
         }
 
         public static string DescribeComponents(GameObject go)

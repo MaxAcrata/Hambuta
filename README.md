@@ -61,6 +61,10 @@ Requirements: .NET SDK 8.x, .NET Framework 4.8 targeting pack (via `Microsoft.NE
 | Rejected | `Haldor`, `Hildir` | `Trader` Interactable conflict |
 | Note | | Skeleton look is a **compromise**, not a human companion |
 
+**Archer loadout (0.5.3):** `Skeleton_Friendly` spawns with a bow + matching ammo (resolved at runtime from `ZNetScene`, cheapest first — item names are asset data, never hardcoded). Default weapon/shield/ammo pools are stripped so nothing displaces the bow; armor is kept.
+
+**Companion XP (0.5.2):** kills credit XP (10–100 by victim health); every 100 XP = level → **+40 max health** + full heal, persisted in world ZDOs (`vc xp`, `vc state` fields 11/12).
+
 ## Move method (Stage 5)
 
 Only `MonsterAI.SetFollowTarget(markerGO)`:

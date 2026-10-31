@@ -2,6 +2,12 @@
 
 All versions are BepInEx plugins under `Valheim\BepInEx\plugins\ValheimCompanion\`.
 
+## 0.5.3 — 2026-10-31
+
+- **Archer companion:** `Skeleton_Friendly` spawns with a bow + matching ammo (both resolved at runtime from ZNetScene, cheapest first — no hardcoded item names).
+- Loadout: bow equipped in the left hand, ammo stack 100 in the ammo slot; default/random weapon, shield and ammo pools are stripped so nothing displaces the bow (armor untouched).
+- XP/leveling unchanged (0.5.2).
+
 ## 0.5.2 — 2026-10-31
 
 - Companion XP: kills credit XP (scaled by victim max health, 10–100), persisted in ZDO (`vc_xp`/`vc_level`).
